@@ -181,6 +181,7 @@ public:
 	}
 	void unget(int n) { linepos -= n; }
 	void unget(const char* s) { linepos -= curline() - s; }
+	char b() { return linepos == 0 ? 0 : line[linepos-1]; }
 	char c() { return line[linepos]; }
 	char d() { return line[linepos] ? line[linepos+1] : 0; }
 	char getc();

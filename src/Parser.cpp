@@ -63,10 +63,16 @@ static bool skipSpace(Thread& th)
 
 const char* nonnamechars = ";()[]{}.`,:\"\n";
 
-static bool endOfWord(int c)
+static bool isassignment(int c, int b)
 {
-	return c == 0 || isspace(c) || strchr(nonnamechars, c) != nullptr;
+	return c == '=' && b != '=' && b != '<' && b != '>';
 }
+
+static bool endOfWord(int c, int b)
+{
+	return c == 0 || isspace(c) || isassignment(c, b) || strchr(nonnamechars, c) != nullptr;
+}
+
 
 static bool parseHexNumber(Thread& th, P<Code>& code)
 {
@@ -82,7 +88,7 @@ static bool parseHexNumber(Thread& th, P<Code>& code)
 		c = th.getc();
 	}
 
-	if (!endOfWord(c)) {
+	if (!endOfWord(c, th.b())) {
 		// even though it starts out like a number it continues as some other token
 		th.unget(start);
 		return false;
@@ -185,11 +191,11 @@ static bool parseNumber(Thread& th, Z& result)
 	if (parseFloat(th, a)) {
 		if (th.c() == '/') {
 			th.getc();
-			if (parseFloat(th, b) && endOfWord(th.c())) {
+			if (parseFloat(th, b) && endOfWord(th.c(), th.b())) {
 				result = a/b;
 				return true;
 			}
-		} else if (endOfWord(th.c())) {
+		} else if (endOfWord(th.c(), th.b())) {
 			result = a;
 			return true;
 		}
@@ -568,7 +574,7 @@ bool parseSymbol(Thread& th, P<String>& result)
 	const char* start = th.curline();
 	int c = th.getc();
 	
-	while(!endOfWord(c)) {
+	while(!endOfWord(c, th.b())) {
 		c = th.getc();
 	}
 	th.unget(1);
@@ -615,6 +621,65 @@ static void bindVarFromList(Thread& th, P<String> const& name, P<Code>& code)
 	}
 }
 
+static bool parseAssignment(Thread& th, P<Code>& code)
+{
+	th.getc();
+
+	skipSpace(th);		
+	if (th.c() == '(') {
+		th.getc();
+		// parse multiple assign
+		std::vector<P<String>> names;
+		{
+			P<String> name2;
+			while (parseSymbol(th, name2)) {
+				names.push_back(name2);
+			}
+		}
+		if (names.size() == 0) {
+			syntaxError("expected a name after '= ('\n");
+		}
+		for (int64_t i = names.size()-1; i>=0; --i) {
+			bindVar(th, names[i], code);
+		}
+		skipSpace(th);
+		if (th.c() != ')') {
+			syntaxError("expected ')' after '= ('\n");
+		}
+		th.getc();
+		code->add(opNone, 0.);
+	} else if (th.c() == '[') {
+		th.getc();
+		// parse assign from array
+		std::vector<P<String>> names;
+		{
+			P<String> name2;
+			while (parseSymbol(th, name2)) {
+				names.push_back(name2);
+			}
+		}
+		if (names.size() == 0) {
+			syntaxError("expected a name after '= ['\n");
+		}
+		for (size_t i = 0; i<names.size(); ++i) {
+			bindVarFromList(th, names[i], code);
+		}
+		skipSpace(th);
+		if (th.c() != ']') {
+			syntaxError("expected ']' after '= ['\n");
+		}
+		th.getc();
+		code->add(opNone, 0.);
+	} else {
+		P<String> name2;
+		if (!parseSymbol(th, name2)) {
+			syntaxError("expected a name after '='\n");
+		}
+		bindVar(th, name2, code);
+	}
+	return true;
+}
+
 bool parseWord(Thread& th, P<Code>& code)
 {
 	//ScopeLog sl("parseWord");
@@ -622,61 +687,8 @@ bool parseWord(Thread& th, P<Code>& code)
 
 	if (!parseSymbol(th, name)) return false;
 		
-	if (strcmp(name->cstr(), "=")==0) {
+	{
 
-		skipSpace(th);		
-		if (th.c() == '(') {
-			th.getc();
-			// parse multiple assign
-			std::vector<P<String>> names;
-			{
-				P<String> name2;
-				while (parseSymbol(th, name2)) {
-					names.push_back(name2);
-				}
-			}
-			if (names.size() == 0) {
-				syntaxError("expected a name after '= ('\n");
-			}
-			for (int64_t i = names.size()-1; i>=0; --i) {
-				bindVar(th, names[i], code);
-			}
-			skipSpace(th);
-			if (th.c() != ')') {
-				syntaxError("expected ')' after '= ('\n");
-			}
-			th.getc();
-			code->add(opNone, 0.);
-		} else if (th.c() == '[') {
-			th.getc();
-			// parse assign from array
-			std::vector<P<String>> names;
-			{
-				P<String> name2;
-				while (parseSymbol(th, name2)) {
-					names.push_back(name2);
-				}
-			}
-			if (names.size() == 0) {
-				syntaxError("expected a name after '= ['\n");
-			}
-			for (size_t i = 0; i<names.size(); ++i) {
-				bindVarFromList(th, names[i], code);
-			}
-			skipSpace(th);
-			if (th.c() != ']') {
-				syntaxError("expected ']' after '= ['\n");
-			}
-			th.getc();
-			code->add(opNone, 0.);
-		} else {
-			P<String> name2;
-			if (!parseSymbol(th, name2)) {
-				syntaxError("expected a name after '='\n");
-			}
-			bindVar(th, name2, code);
-		}
-	} else {
 		V val;
 		size_t index;
 		int scope = th.mCompileScope->indirectLookup(th, name, index, val);
@@ -706,6 +718,7 @@ bool parseWord(Thread& th, P<Code>& code)
 	
 	return true;
 }
+
 
 static bool parseString(Thread& th, P<Code>& code)
 {
@@ -758,6 +771,11 @@ static String* parseString(Thread& th)
 	return new String(str.c_str());
 }
 
+static bool beginsAssignment(Thread& th)
+{
+	return (th.c() == '=' && th.d() != '=' && th.d() != '>' && th.d() != '<');
+}
+
 bool parseElem(Thread& th, P<Code>& code)
 {	
 	skipSpace(th);
@@ -788,6 +806,8 @@ bool parseElem(Thread& th, P<Code>& code)
 		return parseComma(th, code);
 	if (c == ':')
 		return parseColon(th, code);
+	if (beginsAssignment(th))
+		return parseAssignment(th, code);
 
 	if (c == '0' && th.d() == 'x') 
 		return parseHexNumber(th, code) || parseWord(th, code);
